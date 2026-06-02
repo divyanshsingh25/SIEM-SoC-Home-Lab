@@ -240,7 +240,7 @@ Protocol: tcp
 Initiated: false
 SourcePortName: ms-wbt-server
 ```
-
+![Image Description](![alt text](<Screenshot 2026-06-01 195517.png>))
 **Key Indicator:** Repeated connections to/from port 3389 over short duration.
 
 ---
@@ -285,7 +285,7 @@ EventCode=4625
 | stats count(distinct Account_Name) as unique_accounts by SourceIP
 | where unique_accounts > 3
 ```
-
+![alt text](![alt text](<Screenshot 2026-06-01 195620.png>))
 ---
 
 ### SPL Query 4: RDP Connection Spike
