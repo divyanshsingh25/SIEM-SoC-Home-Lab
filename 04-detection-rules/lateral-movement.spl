@@ -1,0 +1,85 @@
+# 🔗 Lateral Movement Detection
+# ============================================================================
+# WHAT IT DOES
+# Detects when an attacker "hops" from one machine to another in your network.
+# They got into machine A, now they're trying to reach machine B, C, D...
+# Red flag: processes accessing network shares or spawning shells on remote machines.
+#
+# WHY IT MATTERS
+# If someone breached one device, stopping them from reaching others saves the day.
+# This catches the "moving sideways" phase of an attack.
+#
+# MITRE ATT&CK MAPPING
+# T1021.002 - Remote Services: SMB/Windows Admin Shares
+# T1021.006 - Remote Services: Windows Management Instrumentation (WMI)
+# T1021.001 - Remote Services: Remote Desktop Protocol (RDP)
+# ============================================================================
+
+index=main sourcetype=sysmon EventID=3
+| where 
+    (DestinationPort IN (445, 135, 139) OR  /* SMB, RPC, NetBIOS */
+     DestinationPort=3389) AND                /* RDP */
+    SourceIp!=DestinationIp
+| stats 
+    dc(DestinationIp) as targets_reached,
+    count as connection_count,
+    earliest(_time) as movement_start,
+    latest(_time) as movement_end
+    by SourceIp
+| where targets_reached > 2  /* Touching 3+ machines = lateral movement */
+| convert ctime(movement_start), ctime(movement_end)
+| eval movement_timeline=movement_end - movement_start
+| append 
+    [search index=main sourcetype=sysmon EventID=1 ParentCommandLine="*cmd /c*" OR ParentCommandLine="*powershell*"
+    | where ComputerName!=SourceComputerName  /* Process on remote machine */
+    | stats count by ComputerName, Image, User]
+| fields SourceIp, targets_reached, connection_count, movement_start, movement_end, movement_timeline
+| sort - targets_reached
+
+
+# 🔧 TUNING GUIDE
+# ============================================================================
+# WHAT ARE THESE PORTS?
+#
+# Port 445  = SMB (Server Message Block)
+#             Used to access shared folders, admin shares
+#             → Attackers use: net use, PsExec, CrackMapExec
+#
+# Port 135  = RPC Endpoint Mapper
+#             Remote Procedure Call — deeper system access
+#             → Attackers use: WMI, scheduled tasks
+#
+# Port 139  = NetBIOS over TCP
+#             Older network protocol, still around
+#             → Attackers use: null sessions, relay attacks
+#
+# Port 3389 = RDP (Remote Desktop Protocol)
+#             Interactive remote desktop access
+#             → Attackers use: stolen credentials, pass-the-hash
+#
+# ============================================================================
+# SENSITIVITY TUNING:
+#
+# 🔴 AGGRESSIVE (Catch first hop)
+#    Change "targets_reached > 2" to "targets_reached > 1"
+#    → Will alert on any multi-machine access
+#    → False positives: IT admins, remote support, backups
+#    → Good for detecting compromises early
+#
+# 🟡 BALANCED (Current setup)
+#    Keep "targets_reached > 2"
+#    → Requires hitting 3+ machines
+#    → Weeds out legitimate point-to-point connections
+#    → RECOMMENDED
+#
+# 🟢 CONSERVATIVE (Only obvious campaigns)
+#    Change "targets_reached > 2" to "targets_reached > 5"
+#    → Only flags massive spreading
+#    → Silent on careful attackers
+#
+# ============================================================================
+# EXPECTED BEHAVIOR IN YOUR LAB:
+# - CrackMapExec from Kali → Windows 10 will trigger this
+# - PsExec / lateral movement attacks will show Kali as source
+# - Look for: Kali IP connecting to port 445 on Windows 10
+# ============================================================================

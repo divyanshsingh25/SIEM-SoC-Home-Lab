@@ -1,0 +1,96 @@
+# ⚠️ Suspicious Process Execution Detection
+# ============================================================================
+# WHAT IT DOES
+# Flags processes that scream "attacker was here" — tools and techniques
+# commonly seen in real attacks. We're looking for:
+# • Command prompts spawned from unusual parents (Word, Excel, Outlook)
+# • PowerShell doing sneaky things
+# • Known hacking tools (ncat, nc.exe, mimikatz, etc.)
+# • Base64-encoded commands (obfuscation red flag)
+#
+# WHY IT MATTERS
+# Normal users don't run cmd.exe from Microsoft Word. Attackers do.
+# This catches the "execution" phase of an attack.
+#
+# MITRE ATT&CK MAPPING
+# T1059 - Command and Scripting Interpreter
+# T1218 - Signed Binary Proxy Execution (LOLBins)
+# T1027 - Obfuscated Files or Information
+# ============================================================================
+
+index=main sourcetype=sysmon EventID=1
+| eval 
+    suspicious_parent=case(
+        ParentImage="*\\WINWORD.EXE" OR
+        ParentImage="*\\EXCEL.EXE" OR
+        ParentImage="*\\OUTLOOK.EXE" OR
+        ParentImage="*\\POWERPNT.EXE", "Office App",
+        
+        ParentImage="*\\explorer.exe" AND 
+        (Image="*\\powershell.exe" OR Image="*\\cmd.exe"), "Explorer Launch Shell",
+        
+        ParentImage="*\\svchost.exe" AND
+        (Image="*\\cmd.exe" OR Image="*\\powershell.exe"), "Service Host Shell",
+        
+        1=1, null
+    ),
+    
+    suspicious_tool=case(
+        Image LIKE "%ncat%" OR
+        Image LIKE "%nc.exe%" OR
+        Image LIKE "%netcat%" OR
+        Image LIKE "%mimikatz%" OR
+        Image LIKE "%psexec%" OR
+        Image LIKE "%7z.exe%" OR
+        CommandLine LIKE "%base64%" OR
+        CommandLine LIKE "%FromBase64String%", "YES",
+        1=1, "NO"
+    )
+    
+| where suspicious_parent!="" OR suspicious_tool="YES"
+| table _time, Computer, User, Image, ParentImage, CommandLine, suspicious_parent, suspicious_tool
+| sort - _time
+
+
+# 🔧 TUNING GUIDE
+# ============================================================================
+# HOW TO READ THE DETECTION:
+#
+# "suspicious_parent" = Process launched by an unusual parent
+#   Examples that will trigger:
+#   - cmd.exe spawned by Word = ransomware template
+#   - PowerShell from Excel = malicious macro
+#   - Shell from svchost = privilege escalation attempt
+#
+# "suspicious_tool" = Known hacking tool or obfuscation technique
+#   Examples:
+#   - ncat, nc.exe = reverse shells
+#   - mimikatz = credential theft
+#   - base64 in command = obfuscation
+#
+# ============================================================================
+# SENSITIVITY TUNING:
+#
+# 🔴 AGGRESSIVE (Catch weird behavior)
+#    Add more suspicious parents:
+#    - AcroRd32.exe (PDF reader)
+#    - chrome.exe, firefox.exe (browsers)
+#    - winrar.exe (archive tools)
+#    → Expect more noise, catch more creative attacks
+#
+# 🟡 BALANCED (Current setup)
+#    Keep it as-is
+#    → Catches real attacks without too many false positives
+#    → RECOMMENDED
+#
+# 🟢 CONSERVATIVE (Reduce false positives)
+#    Remove Office app parent check
+#    Focus only on known tools
+#    → Misses sophisticated attacks
+#
+# ============================================================================
+# EXPECTED BEHAVIOR IN YOUR LAB:
+# - Metasploit reverse shell will trigger suspicious_parent
+# - Atomic Red Team LOLBin execution will trigger suspicious_parent
+# - Running Mimikatz will trigger suspicious_tool
+# ============================================================================

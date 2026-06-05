@@ -1,0 +1,54 @@
+# 🎯 Port Scan Detection
+# ============================================================================
+# WHAT IT DOES
+# Detects when a single host rapidly connects to many different ports on the
+# same target machine. This is the "fingerprinting" phase attackers use to
+# find vulnerable services.
+#
+# WHY IT MATTERS
+# Port scans are noisy and obvious—an attacker probing for open services.
+# This is your early warning system before they actually exploit anything.
+#
+# MITRE ATT&CK MAPPING
+# T1046 - Network Service Scanning
+# ============================================================================
+
+index=main sourcetype=sysmon EventID=3
+| stats 
+    dc(DestinationPort) as unique_ports,
+    count as connection_attempts,
+    earliest(_time) as first_attempt,
+    latest(_time) as last_attempt
+    by SourceIp, DestinationIp
+| where unique_ports > 10
+| convert ctime(first_attempt), ctime(last_attempt)
+| eval duration=last_attempt - first_attempt
+| fields SourceIp, DestinationIp, unique_ports, connection_attempts, duration, first_attempt, last_attempt
+| sort - unique_ports
+
+
+# 🔧 TUNING GUIDE
+# ============================================================================
+# SENSITIVITY LEVELS:
+#
+# 🔴 AGGRESSIVE (Catch more scans, more false positives)
+#    Change "unique_ports > 10" to "unique_ports > 5"
+#    → Catches slow, stealthy scans
+#    → May flag legitimate network scanners (Nessus, Qualys)
+#
+# 🟡 BALANCED (Sweet spot for most environments)
+#    Keep "unique_ports > 10" 
+#    → Catches real attacks
+#    → Minimal noise
+#    → RECOMMENDED
+#
+# 🟢 CONSERVATIVE (Fewer alerts, might miss slow attacks)
+#    Change "unique_ports > 10" to "unique_ports > 20"
+#    → Only flags massive scans
+#    → Silent on low-and-slow reconnaissance
+#
+# ============================================================================
+# EXPECTED BEHAVIOR IN YOUR LAB:
+# - nmap scan from Kali should trigger this IMMEDIATELY
+# - Look for: Kali VM IP → Windows 10 VM IP with 10-65000+ unique ports
+# ============================================================================

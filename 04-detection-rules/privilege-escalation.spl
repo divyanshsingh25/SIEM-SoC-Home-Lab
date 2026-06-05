@@ -1,0 +1,113 @@
+# 👑 Privilege Escalation Detection
+# ============================================================================
+# WHAT IT DOES
+# Spots attempts to go from regular user → Administrator/SYSTEM.
+# We're looking for:
+# • Failed privilege escalation attempts (UAC bypasses, RunAs failures)
+# • Creation of scheduled tasks by non-admin users
+# • Registry persistence techniques (Registry modifications in sensitive paths)
+# • Service installations from user context
+#
+# WHY IT MATTERS
+# A regular user account is annoying. Admin access = game over.
+# Stopping privilege escalation = stopping the attacker from getting control.
+#
+# MITRE ATT&CK MAPPING
+# T1548 - Abuse Elevation Control Mechanism
+# T1547.001 - Boot or Logon Autostart Execution: Registry Run Keys
+# T1053.005 - Scheduled Task/Job: Scheduled Task
+# ============================================================================
+
+index=main sourcetype=sysmon (EventID=1 OR EventID=13)
+| eval 
+    privilege_escalation_indicator=case(
+        /* Scheduled task creation (persistence) */
+        Image="*\\schtasks.exe" AND 
+        (CommandLine="*/create*" OR CommandLine="*/change*"), 
+        "Scheduled Task Creation",
+        
+        /* Registry run key modification (persistence) */
+        EventID=13 AND 
+        (TargetObject LIKE "*\\Software\\Microsoft\\Windows\\CurrentVersion\\Run*" OR
+         TargetObject LIKE "*\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce*"),
+        "Registry Run Key Modification",
+        
+        /* Service installation from user context */
+        Image="*\\sc.exe" AND CommandLine="*create*",
+        "Service Installation",
+        
+        /* UAC bypass attempts (eventviewer, wmic, etc.) */
+        (Image="*\\eventvwr.exe" OR 
+         Image="*\\wmic.exe" OR
+         Image="*\\compmgmt.msc*") AND
+        ParentImage="*\\explorer.exe",
+        "UAC Bypass Attempt",
+        
+        1=1, null
+    )
+    
+| where privilege_escalation_indicator!=""
+| stats 
+    count as attempts,
+    dc(TargetObject) as targets_modified,
+    earliest(_time) as first_attempt,
+    latest(_time) as last_attempt
+    by Computer, User, privilege_escalation_indicator
+| convert ctime(first_attempt), ctime(last_attempt)
+| sort - attempts
+
+
+# 🔧 TUNING GUIDE
+# ============================================================================
+# WHAT ARE THESE INDICATORS?
+#
+# 👁️ SCHEDULED TASK CREATION
+#   Why suspicious: Creates automatic execution without user knowledge
+#   Example: schtasks /create /tn "WindowsUpdate" /sc onlogon /tr "powershell.exe -enc ..."
+#   Legitimate use: IT admins, backup software, system maintenance
+#   Tuning: Whitelist known admin users / scheduled task creators
+#
+# 👁️ REGISTRY RUN KEY MODIFICATION
+#   Why suspicious: Runs malware every time Windows starts = persistence
+#   Example: "Registry\\HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+#   Legitimate use: Software installers (Chrome, Slack, etc.)
+#   Tuning: Whitelist software installation paths
+#
+# 👁️ SERVICE INSTALLATION
+#   Why suspicious: Services run with SYSTEM privileges, survive reboots
+#   Example: sc create BadService binPath= "C:\\Temp\\malware.exe"
+#   Legitimate use: System administrators, installers
+#   Tuning: Require service installs from specific admin groups only
+#
+# 👁️ UAC BYPASS ATTEMPTS
+#   Why suspicious: Tools designed to skip security prompts
+#   Example: eventvwr.exe (Event Viewer) run from Explorer = UAC bypass
+#   Legitimate use: Rare (most admins disable UAC or run as admin)
+#   Tuning: Whitelist known admin workflows
+#
+# ============================================================================
+# SENSITIVITY TUNING:
+#
+# 🔴 AGGRESSIVE (Catch all escalation attempts)
+#    Add more indicators:
+#    - Image="*\\runas.exe" (RunAs command)
+#    - Image="*\\powershell.exe" with "New-LocalUser" commands
+#    → Will catch some legitimate admin activity
+#    → Good for high-security environments
+#
+# 🟡 BALANCED (Current setup)
+#    Keep it as-is
+#    → Catches real escalation without too much noise
+#    → RECOMMENDED
+#
+# 🟢 CONSERVATIVE (Only obvious escalation)
+#    Remove UAC bypass section
+#    Focus only on registry and scheduled tasks
+#    → Misses some attacks
+#
+# ============================================================================
+# EXPECTED BEHAVIOR IN YOUR LAB:
+# - Atomic Red Team privilege escalation will trigger these
+# - Registry modifications for persistence will show up
+# - Scheduled task creation from attack will be detected
+# ============================================================================

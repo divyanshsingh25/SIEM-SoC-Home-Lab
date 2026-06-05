@@ -1,0 +1,61 @@
+# 🚨 RDP Brute Force Detection
+# ============================================================================
+# WHAT IT DOES
+# Spots someone (or a bot) hammering the RDP login door with failed attempts.
+# We're looking for the telltale sign: many failed logins from the same source
+# IP in a short time window.
+#
+# WHY IT MATTERS
+# RDP is like leaving your front door unlocked. Brute force attacks are common
+# and automated. Quick detection = quick response before they get in.
+#
+# MITRE ATT&CK MAPPING
+# T1110.001 - Brute Force: Password Guessing
+# T1021.001 - Remote Services: Remote Desktop Protocol
+# ============================================================================
+
+index=main sourcetype="WinEventLog:Security" EventCode=4625
+| stats 
+    count as failed_attempts,
+    dc(User) as unique_users_targeted,
+    earliest(_time) as attack_start,
+    latest(_time) as attack_end
+    by SourceIp, Computer
+| where failed_attempts > 15
+| convert ctime(attack_start), ctime(attack_end)
+| eval attack_window=attack_end - attack_start
+| fields SourceIp, Computer, failed_attempts, unique_users_targeted, attack_window, attack_start, attack_end
+| sort - failed_attempts
+
+
+# 🔧 TUNING GUIDE
+# ============================================================================
+# WHAT IS "failed_attempts"?
+# Event Code 4625 = Failed RDP login
+# We count how many of these happened from one IP to one machine
+#
+# SENSITIVITY LEVELS:
+#
+# 🔴 AGGRESSIVE (Catch everything suspicious)
+#    Change "failed_attempts > 15" to "failed_attempts > 5"
+#    → Will catch even slow brute force
+#    → Users with bad passwords = false positives
+#    → Good if RDP is critical in your environment
+#
+# 🟡 BALANCED (Most environments)
+#    Keep "failed_attempts > 15"
+#    → 15 attempts ≈ 30-60 seconds of hammering
+#    → Clearly malicious behavior
+#    → RECOMMENDED
+#
+# 🟢 CONSERVATIVE (Only obvious attacks)
+#    Change "failed_attempts > 15" to "failed_attempts > 50"
+#    → Low-and-slow attacks slip through
+#    → Good for very noisy environments
+#
+# ============================================================================
+# EXPECTED BEHAVIOR IN YOUR LAB:
+# - Hydra from Kali running RDP brute force will trigger this
+# - Look for: Kali VM IP → Windows 10 VM with 50-1000+ failed attempts in seconds
+# - Alert severity: CRITICAL if 50+ attempts, HIGH if 15+
+# ============================================================================
